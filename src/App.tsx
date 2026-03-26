@@ -26,7 +26,7 @@ import {
   Image as ImageIcon,
   Loader2
 } from 'lucide-react';
-import { toPng } from 'html-to-image';
+import { toPng, toBlob } from 'html-to-image';
 import { STEPS, UserProgress } from './types';
 import { GoogleGenAI } from "@google/genai";
 
@@ -70,20 +70,52 @@ export default function App() {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const handleDownloadImage = async () => {
-    if (!reportRef.current) return;
+    console.log('Starting image generation...');
+    if (!reportRef.current) {
+      console.error('Report ref is null');
+      return;
+    }
     
+    if (isGeneratingImage) return;
+    
+    console.log('Starting image generation process...');
     setIsGeneratingImage(true);
     setShowSaveOptions(false);
     
+    // Safety timeout to reset generating state if it hangs
+    const safetyTimeout = setTimeout(() => {
+      if (isGeneratingImage) {
+        console.warn('Image generation timed out after 15s');
+        setIsGeneratingImage(false);
+      }
+    }, 15000);
+    
     try {
-      // Small delay to ensure any UI transitions are finished
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Scroll to top of report to ensure full capture
+      reportRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
       
-      const dataUrl = await toPng(reportRef.current, {
-        cacheBust: true,
+      // Small delay to ensure any UI transitions and scrolling are finished
+      // Increased delay for better stability
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      console.log('Capturing report with html-to-image (toBlob)...');
+      
+      // Use toBlob for better stability in some environments
+      const blob = await toBlob(reportRef.current, {
         backgroundColor: '#ffffff',
-        filter: (node) => {
-          if (node.classList && node.classList.contains('no-print')) {
+        pixelRatio: 2,
+        skipFonts: true, 
+        fontEmbedCSS: '', // Disable font embedding
+        cacheBust: true,
+        includeQueryParams: true, // Help resolve relative paths
+        filter: (node: any) => {
+          try {
+            // Exclude elements with no-print class
+            if (node.classList && node.classList.contains('no-print')) {
+              return false;
+            }
+          } catch (e) {
+            // If we can't access classList, it might be a cross-origin element (like an iframe)
             return false;
           }
           return true;
@@ -91,24 +123,62 @@ export default function App() {
         style: {
           borderRadius: '0',
           boxShadow: 'none',
-          border: 'none'
+          border: 'none',
+          margin: '0',
+          padding: '40px'
         }
       });
       
+      if (!blob) {
+        throw new Error('Failed to generate image blob');
+      }
+      
+      console.log('Image generated successfully, triggering download...');
+      const filename = `社群生态梳理报告-${progress.theme.keyword || '未命名'}-${new Date().getTime()}.png`;
+      
+      // Create a blob URL and trigger download
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `社群生态梳理报告-${progress.theme.keyword || '未命名'}.png`;
-      link.href = dataUrl;
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
       link.click();
-    } catch (err) {
-      console.error('Failed to generate image:', err);
+      
+      // Cleanup
+      setTimeout(() => {
+        if (document.body.contains(link)) {
+          document.body.removeChild(link);
+        }
+        window.URL.revokeObjectURL(url);
+      }, 200);
+      
+      console.log('Download triggered for:', filename);
+    } catch (error: any) {
+      console.error('Image generation failed:', error);
+      
+      let errorMessage = '保存图片失败，请重试。';
+      
+      // Check for common cross-origin errors
+      if (error.message?.includes('origin') || error.name === 'SecurityError') {
+        errorMessage = '由于浏览器安全限制（跨域问题），无法直接保存为图片。请尝试使用“保存为 PDF”功能，或者截图保存。';
+      } else if (error.message?.includes('timeout')) {
+        errorMessage = '生成图片超时，请尝试刷新页面后重试。';
+      }
+      
+      alert(errorMessage);
     } finally {
+      clearTimeout(safetyTimeout);
       setIsGeneratingImage(false);
     }
   };
 
   const handleDownloadPDF = () => {
+    console.log('Triggering PDF download (print)...');
     setShowSaveOptions(false);
-    window.print();
+    // Small delay to allow dropdown to close before print dialog opens
+    setTimeout(() => {
+      window.print();
+    }, 300);
   };
 
   const currentStepData = STEPS[progress.currentStep - 1];
@@ -898,18 +968,18 @@ export default function App() {
                   ref={reportRef}
                   initial={{ opacity: 0, y: 40 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="flex-grow flex flex-col bg-white rounded-[48px] p-16 shadow-2xl border border-[#5a5a40]/10 relative overflow-hidden"
+                  className="flex-grow flex flex-col bg-white rounded-[48px] px-12 py-10 md:px-16 md:py-12 shadow-2xl border border-[#5a5a40]/10 relative overflow-hidden"
                 >
                   {/* Decorative Elements */}
                   <div className="absolute top-0 right-0 w-64 h-64 bg-[#5a5a40]/5 rounded-bl-full -mr-32 -mt-32 pointer-events-none" />
                   <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#5a5a40]/5 rounded-tr-full -ml-24 -mb-24 pointer-events-none" />
                   
                   <div className="relative z-10">
-                    <div className="text-center mb-20">
-                      <div className="w-24 h-24 bg-[#5a5a40] text-white rounded-[32px] flex items-center justify-center mx-auto mb-8 shadow-2xl rotate-3">
-                        <Sparkles className="w-12 h-12" />
+                    <div className="text-center mb-12">
+                      <div className="w-20 h-20 bg-[#5a5a40] text-white rounded-[28px] flex items-center justify-center mx-auto mb-6 shadow-2xl rotate-3">
+                        <Sparkles className="w-10 h-10" />
                       </div>
-                      <h2 className="text-5xl font-bold text-[#2a2a20] tracking-tight">社群生态梳理报告</h2>
+                      <h2 className="text-4xl font-bold text-[#2a2a20] tracking-tight">社群生态梳理报告</h2>
                       <div className="flex items-center justify-center gap-4 mt-4">
                         <div className="h-px w-12 bg-[#5a5a40]/20" />
                         <p className="text-[#6a6a50] italic font-serif">“孩子，这是你一步步走出来的脉络。”</p>
@@ -917,7 +987,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="space-y-16 max-w-3xl mx-auto w-full">
+                    <div className="space-y-10 max-w-3xl mx-auto w-full">
                       {/* 01. Theme */}
                       <section className="relative">
                         <div className="absolute -left-12 top-0 text-6xl font-serif italic opacity-5 text-[#5a5a40] pointer-events-none">01</div>
@@ -950,7 +1020,7 @@ export default function App() {
                                   <div className="w-8 h-8 rounded-xl bg-[#5a5a40]/5 flex items-center justify-center text-[#5a5a40] font-bold text-xs">
                                     {i + 1}
                                   </div>
-                                  <span className="font-bold text-[#2a2a20] text-sm">{p}</span>
+                                  <span className="font-bold text-[#2a2a20] text-sm whitespace-nowrap">{p}</span>
                                 </div>
                               ))
                             ) : (
@@ -997,7 +1067,7 @@ export default function App() {
                                 <div className="w-10 h-10 rounded-2xl bg-[#5a5a40]/5 flex items-center justify-center">
                                   <Package className="w-5 h-5 text-[#5a5a40]" />
                                 </div>
-                                <span className="text-[#2a2a20] font-bold">{p}</span>
+                                <span className="text-[#2a2a20] font-bold whitespace-nowrap">{p}</span>
                               </div>
                             ))
                           ) : (
@@ -1023,7 +1093,7 @@ export default function App() {
                                   <div className="flex items-center gap-3 text-white/60 text-[10px] font-bold uppercase tracking-widest">
                                     <span>{formatKeyword(progress.theme.keyword)}</span>
                                     <X className="w-3 h-3" />
-                                    <span>{practitioner}</span>
+                                    <span className="whitespace-nowrap">{practitioner}</span>
                                   </div>
                                   <div className="text-xl text-white font-bold">
                                     {content}
@@ -1040,8 +1110,8 @@ export default function App() {
                       </section>
 
                       {/* Closing Message */}
-                      <div className="pt-12 text-center">
-                        <div className="inline-block p-8 bg-[#f5f5f0] rounded-[40px] max-w-lg">
+                      <div className="pt-6 text-center">
+                        <div className="inline-block p-6 bg-[#f5f5f0] rounded-[32px] max-w-lg">
                           <p className="text-[#5a5a40] leading-relaxed italic">
                             “社群不是建出来的，是长出来的。愿你在这些脉络中，找到属于你的森林。”
                           </p>
@@ -1053,51 +1123,89 @@ export default function App() {
                       </div>
                     </div>
 
-                    <footer className="mt-24 flex justify-center gap-8 no-print">
-                      <button 
-                        onClick={handleBack}
-                        className="px-10 py-4 rounded-full font-bold border-2 border-[#5a5a40]/10 text-[#5a5a40] hover:bg-[#5a5a40] hover:text-white hover:border-[#5a5a40] transition-all"
-                      >
-                        返回修改
-                      </button>
-                      
-                      <div className="relative">
+                    <div className="mt-16 relative flex items-center justify-center min-h-[120px]">
+                      <div className="absolute left-0 no-print">
                         <button 
-                          onClick={() => setShowSaveOptions(!showSaveOptions)}
-                          disabled={isGeneratingImage}
-                          className="px-12 py-4 bg-[#5a5a40] text-white rounded-full font-bold shadow-2xl shadow-[#5a5a40]/30 hover:scale-[1.05] active:scale-[0.95] transition-all flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={handleBack}
+                          className="px-10 py-4 rounded-full font-bold border-2 border-[#5a5a40]/10 text-[#5a5a40] hover:bg-[#5a5a40] hover:text-white hover:border-[#5a5a40] transition-all"
                         >
-                          {isGeneratingImage ? <Loader2 className="w-5 h-5 animate-spin" /> : <ScrollText className="w-5 h-5" />}
-                          {isGeneratingImage ? '正在生成...' : '保存报告'}
+                          返回修改
                         </button>
-
-                        <AnimatePresence>
-                          {showSaveOptions && (
-                            <motion.div
-                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                              className="absolute bottom-full left-0 right-0 mb-4 bg-white rounded-3xl shadow-2xl border border-[#5a5a40]/10 overflow-hidden z-50"
-                            >
-                              <button 
-                                onClick={handleDownloadPDF}
-                                className="w-full px-6 py-4 flex items-center gap-3 hover:bg-[#f5f5f0] transition-colors text-[#5a5a40] font-bold border-b border-[#5a5a40]/5"
-                              >
-                                <FileText className="w-5 h-5" />
-                                <span>保存为 PDF</span>
-                              </button>
-                              <button 
-                                onClick={handleDownloadImage}
-                                className="w-full px-6 py-4 flex items-center gap-3 hover:bg-[#f5f5f0] transition-colors text-[#5a5a40] font-bold"
-                              >
-                                <ImageIcon className="w-5 h-5" />
-                                <span>保存为图片 (PNG)</span>
-                              </button>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
-                    </footer>
+
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="p-2 bg-white rounded-2xl border border-[#5a5a40]/10 shadow-sm">
+                          <div className="w-24 h-24 bg-white rounded-xl flex items-center justify-center overflow-hidden">
+                            <img 
+                              src="https://picsum.photos/seed/qrcode/200/200" 
+                              alt="QR Code" 
+                              className="w-full h-full object-contain"
+                              referrerPolicy="no-referrer"
+                              crossOrigin="anonymous"
+                            />
+                          </div>
+                        </div>
+                        <p className="text-[10px] font-bold text-[#5a5a40] uppercase tracking-[0.2em]">扫码了解更多</p>
+                      </div>
+                      
+                      <div className="absolute right-0 no-print z-[100]">
+                        <div className="relative">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              console.log('Toggle save options clicked, current state:', showSaveOptions);
+                              setShowSaveOptions(!showSaveOptions);
+                            }}
+                            disabled={isGeneratingImage}
+                            className="px-12 py-4 bg-[#5a5a40] text-white rounded-full font-bold shadow-2xl shadow-[#5a5a40]/30 hover:scale-[1.05] active:scale-[0.95] transition-all flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {isGeneratingImage ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                            {isGeneratingImage ? '正在生成...' : '保存报告'}
+                          </button>
+
+                          <AnimatePresence>
+                            {showSaveOptions && (
+                              <motion.div
+                                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                className="absolute bottom-full right-0 mb-4 bg-white rounded-3xl shadow-2xl border border-[#5a5a40]/10 overflow-hidden z-[110] min-w-[220px]"
+                              >
+                                <div className="p-3 bg-[#f5f5f0] text-[10px] font-bold text-[#5a5a40]/60 uppercase tracking-widest text-center border-b border-[#5a5a40]/5">
+                                  选择保存格式
+                                </div>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDownloadPDF();
+                                  }}
+                                  className="w-full px-6 py-4 flex items-center gap-3 hover:bg-[#f5f5f0] transition-colors text-[#5a5a40] font-bold border-b border-[#5a5a40]/5 text-left"
+                                >
+                                  <FileText className="w-5 h-5" />
+                                  <div className="flex flex-col">
+                                    <span>保存为 PDF</span>
+                                    <span className="text-[9px] font-normal opacity-60">适合打印和分享</span>
+                                  </div>
+                                </button>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDownloadImage();
+                                  }}
+                                  className="w-full px-6 py-4 flex items-center gap-3 hover:bg-[#f5f5f0] transition-colors text-[#5a5a40] font-bold text-left"
+                                >
+                                  <ImageIcon className="w-5 h-5" />
+                                  <div className="flex flex-col">
+                                    <span>保存为图片 (PNG)</span>
+                                    <span className="text-[9px] font-normal opacity-60">适合手机保存和社交媒体</span>
+                                  </div>
+                                </button>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </motion.div>
               )}
